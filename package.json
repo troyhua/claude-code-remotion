@@ -1,0 +1,26 @@
+{
+  "name": "video",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "preview": "npx remotion studio",
+    "render": "npx remotion render src/index.ts ProductDemo out/ProductDemo.mp4",
+    "render:gif": "npx remotion render src/index.ts ProductDemo out/ProductDemo.gif --codec gif"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@remotion/cli": "^4.0.438",
+    "@remotion/media": "^4.0.438",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.438"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3"
+  }
+}
