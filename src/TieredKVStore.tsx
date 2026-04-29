@@ -154,632 +154,229 @@ const useGlowPulse = (
 
 // --- Main scene ---
 // Timeline:
-//   0-2s:   Title + step label appear, split-screen zones fade in
-//   2-4s:   Three matrices appear in center (from Scene 1)
-//   4-6.5s: K̄ᴿ moves into GPU VRAM
-//   6.5-9s: K̄ and V̄ move into CPU DRAM
-//   9-12s:  Explanation text + "100M tokens" callout
+//   0-2s:   Title + zones appear (2 GPUs + CPU DRAM)
+//   2-4s:   Three matrices appear in center
+//   4-6s:   K̄ᴿ splits and moves into both GPUs (distributed)
+//   6.5-8s: K̄ and V̄ move to CPU DRAM
+//   8-12s:  Explanation text + "100M tokens" callout
 const TieredKVStoreScene: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
   const glowPulse = useGlowPulse(frame, fps, 0.6, 0.4);
 
-  // --- Layout ---
-  // Zones pushed to edges, leaving clear center for matrices
-  const GPU_X = 60;
-  const GPU_W = 460;
-  const CPU_X = 1400;
-  const CPU_W = 460;
-  const ZONE_Y = 200;
-  const ZONE_H = 580;
+  const ci = (ir: [number, number], or: [number, number]) =>
+    interpolate(frame, ir, or, { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
 
-  // Center staging area for matrices (wide gap between zones)
-  const CENTER_X = 960;
-  const CENTER_Y = 350;
-  const MATRIX_GAP = 180;
+  // --- Layout: 2 GPUs on left, CPU on right ---
+  const GPU0_X = 60;
+  const GPU1_X = 60;
+  const GPU_W = 380;
+  const GPU0_Y = 190;
+  const GPU1_Y = 530;
+  const GPU_H = 280;
 
-  // Target positions inside zones
-  const GPU_TARGET_X = GPU_X + GPU_W / 2;
-  const GPU_TARGET_Y = ZONE_Y + ZONE_H / 2 + 20;
-  const CPU_KV_Y = ZONE_Y + ZONE_H / 2;
-  const CPU_K_TARGET_X = CPU_X + CPU_W / 2 - 90;
-  const CPU_V_TARGET_X = CPU_X + CPU_W / 2 + 90;
+  const CPU_X = 1380;
+  const CPU_W = 480;
+  const CPU_Y = 190;
+  const CPU_H = 620;
+
+  // Center staging area for matrices
+  const CENTER_X = 880;
+  const CENTER_Y = 380;
+  const MATRIX_GAP = 170;
+
+  // Target positions inside GPU zones
+  const GPU0_TARGET_X = GPU0_X + GPU_W / 2;
+  const GPU0_TARGET_Y = GPU0_Y + GPU_H / 2 + 10;
+  const GPU1_TARGET_X = GPU1_X + GPU_W / 2;
+  const GPU1_TARGET_Y = GPU1_Y + GPU_H / 2 + 10;
+
+  // CPU targets
+  const CPU_KV_Y = CPU_Y + CPU_H / 2;
+  const CPU_K_TARGET_X = CPU_X + CPU_W / 2 - 80;
+  const CPU_V_TARGET_X = CPU_X + CPU_W / 2 + 80;
 
   // --- Animations ---
+  const titleOp = ci([0, 0.5 * fps], [0, 1]);
+  const titleY2 = interpolate(frame, [0, 0.5 * fps], [-20, 0], { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) });
+  const stepOp = ci([0.3 * fps, 0.6 * fps], [0, 1]);
+  const zoneProgress = ci([0.5 * fps, 1.5 * fps], [0, 1]);
+  const zoneLabelOp = ci([1 * fps, 1.5 * fps], [0, 1]);
 
-  // Title
-  const titleOpacity = interpolate(frame, [0, 0.5 * fps], [0, 1], {
-    extrapolateRight: "clamp",
-  });
-  const titleY = interpolate(frame, [0, 0.5 * fps], [-20, 0], {
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
+  const matricesAppear = spring({ frame: frame - 2 * fps, fps, config: { damping: 15, stiffness: 120 } });
 
-  // Step label
-  const stepOpacity = interpolate(frame, [0.3 * fps, 0.6 * fps], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Zone appearance
-  const zoneProgress = interpolate(
-    frame,
-    [0.5 * fps, 1.5 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
-
-  // Zone labels
-  const zoneLabelOpacity = interpolate(
-    frame,
-    [1 * fps, 1.5 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // Matrices appear in center (2-3s)
-  const matricesAppear = spring({
-    frame: frame - 2 * fps,
-    fps,
-    config: { damping: 15, stiffness: 120 },
-  });
-
-  // K̄ᴿ moves to GPU (4-5.5s)
-  const routingMoveProgress = interpolate(
-    frame,
-    [4 * fps, 5.5 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.quad) }
-  );
+  // K̄ᴿ splits: one copy to GPU0, one to GPU1 (4-5.5s)
+  const routingMoveP = ci([4 * fps, 5.5 * fps], [0, 1]);
+  // K̄ᴿ starts as one, splits into two at ~50% progress
+  const splitVisible = routingMoveP > 0.1;
 
   // K̄, V̄ move to CPU (6.5-8s)
-  const kvMoveProgress = interpolate(
-    frame,
-    [6.5 * fps, 8 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.quad) }
-  );
+  const kvMoveP = ci([6.5 * fps, 8 * fps], [0, 1]);
 
-  // Compute matrix positions
-  // Starting positions (center, side by side)
+  // Starting positions
   const kStartX = CENTER_X - MATRIX_GAP;
   const vStartX = CENTER_X;
   const rStartX = CENTER_X + MATRIX_GAP;
   const startY = CENTER_Y;
 
-  // K̄ᴿ position
-  const routingX = interpolate(routingMoveProgress, [0, 1], [rStartX, GPU_TARGET_X]);
-  const routingY = interpolate(routingMoveProgress, [0, 1], [startY, GPU_TARGET_Y]);
+  // K̄ᴿ copy 0 → GPU0
+  const r0X = interpolate(routingMoveP, [0, 1], [rStartX, GPU0_TARGET_X]);
+  const r0Y = interpolate(routingMoveP, [0, 1], [startY, GPU0_TARGET_Y]);
+  // K̄ᴿ copy 1 → GPU1
+  const r1X = interpolate(routingMoveP, [0, 1], [rStartX, GPU1_TARGET_X]);
+  const r1Y = interpolate(routingMoveP, [0, 1], [startY, GPU1_TARGET_Y]);
 
-  // K̄ position
-  const keyX = interpolate(kvMoveProgress, [0, 1], [kStartX, CPU_K_TARGET_X]);
-  const keyY = interpolate(kvMoveProgress, [0, 1], [startY, CPU_KV_Y]);
+  // K̄ → CPU
+  const keyX = interpolate(kvMoveP, [0, 1], [kStartX, CPU_K_TARGET_X]);
+  const keyY2 = interpolate(kvMoveP, [0, 1], [startY, CPU_KV_Y]);
+  // V̄ → CPU
+  const valX = interpolate(kvMoveP, [0, 1], [vStartX, CPU_V_TARGET_X]);
+  const valY = interpolate(kvMoveP, [0, 1], [startY, CPU_KV_Y]);
 
-  // V̄ position
-  const valX = interpolate(kvMoveProgress, [0, 1], [vStartX, CPU_V_TARGET_X]);
-  const valY = interpolate(kvMoveProgress, [0, 1], [startY, CPU_KV_Y]);
+  const gpuGlow = ci([5, 5.5 * fps], [0, 1]);
+  const gpuLabelOp = ci([5.5 * fps, 6 * fps], [0, 1]);
+  const cpuLabelOp = ci([8 * fps, 8.5 * fps], [0, 1]);
+  const explainOp = ci([9 * fps, 9.5 * fps], [0, 1]);
+  const calloutOp = ci([10 * fps, 10.3 * fps], [0, 1]);
+  const calloutScale = spring({ frame: frame - 10 * fps, fps, config: { damping: 12 } });
 
-  // Trail particle effect during movement
-  const routingMoving = frame >= 4 * fps && frame <= 5.5 * fps;
-  const kvMoving = frame >= 6.5 * fps && frame <= 8 * fps;
-
-  // GPU glow intensifies when routing key arrives
-  const gpuGlowIntensity = interpolate(
-    routingMoveProgress,
-    [0.8, 1],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // "Low-latency" label appears after routing key lands
-  const gpuLabelOpacity = interpolate(
-    frame,
-    [5.5 * fps, 6 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // "Offloaded" label appears after KV lands
-  const cpuLabelOpacity = interpolate(
-    frame,
-    [8 * fps, 8.5 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // Explanation text (9-12s)
-  const explainOpacity = interpolate(
-    frame,
-    [9 * fps, 9.5 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  const tokenCalloutScale = spring({
-    frame: frame - 10 * fps,
-    fps,
-    config: { damping: 12 },
-  });
-  const tokenCalloutOpacity = interpolate(
-    frame,
-    [10 * fps, 10.3 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  // GPU card component
+  const GpuCard: React.FC<{ id: number; x: number; y: number }> = ({ id, x, y }) => (
+    <div style={{
+      position: "absolute", top: y, left: x, width: GPU_W, height: GPU_H,
+      backgroundColor: COLORS.gpuBg, border: `2px solid ${COLORS.gpuBorder}`, borderRadius: 14,
+      opacity: zoneProgress, transform: `scale(${interpolate(zoneProgress, [0, 1], [0.95, 1])})`,
+      boxShadow: `inset 0 0 ${40 + 30 * gpuGlow}px ${COLORS.gpuGlow}, 0 0 ${10 + 20 * gpuGlow}px ${COLORS.gpuGlow}`,
+    }}>
+      <div style={{ position: "absolute", top: 14, left: 16, display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: COLORS.gpuBorder, opacity: zoneLabelOp * glowPulse, boxShadow: `0 0 6px ${COLORS.gpuBorder}` }} />
+        <span style={{ color: COLORS.gpuBorder, fontSize: 20, fontFamily: MONO, fontWeight: 600 }}>
+          GPU {id} VRAM
+        </span>
+      </div>
+      <div style={{ position: "absolute", top: 14, right: 14, opacity: zoneLabelOp }}>
+        <span style={{ color: `${COLORS.gpuBorder}80`, fontSize: 14, fontFamily: MONO }}>Shard {id}</span>
+      </div>
+      {/* Bottom label */}
+      <div style={{ position: "absolute", bottom: 14, width: "100%", textAlign: "center", opacity: gpuLabelOp }}>
+        <span style={{ color: COLORS.gpuBorder, fontSize: 14, fontFamily: MONO, fontWeight: 600 }}>
+          <MathText><Overline>K</Overline></MathText><Sup>R</Sup> shard {id}
+        </span>
+      </div>
+    </div>
   );
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.bg }}>
-      {/* ===== Title ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: 45,
-          width: "100%",
-          textAlign: "center",
-          opacity: titleOpacity,
-          transform: `translateY(${titleY}px)`,
-          color: COLORS.text,
-          fontSize: 48,
-          fontFamily: FONT,
-          fontWeight: 700,
-          letterSpacing: -1,
-        }}
-      >
+      {/* Title */}
+      <div style={{ position: "absolute", top: 45, width: "100%", textAlign: "center", opacity: titleOp, transform: `translateY(${titleY2}px)`, color: COLORS.text, fontSize: 48, fontFamily: FONT, fontWeight: 700, letterSpacing: -1 }}>
         Tiered KV Store
       </div>
-
-      {/* Step label */}
-      <div
-        style={{
-          position: "absolute",
-          top: 110,
-          width: "100%",
-          textAlign: "center",
-          opacity: stepOpacity,
-          color: COLORS.accent,
-          fontSize: 22,
-          fontFamily: MONO,
-          fontWeight: 500,
-          letterSpacing: 2,
-        }}
-      >
+      <div style={{ position: "absolute", top: 110, width: "100%", textAlign: "center", opacity: stepOp, color: COLORS.accent, fontSize: 22, fontFamily: MONO, fontWeight: 500, letterSpacing: 2 }}>
         MEMORY PARALLELISM
       </div>
 
-      {/* ===== GPU VRAM Zone ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: ZONE_Y,
-          left: GPU_X,
-          width: GPU_W,
-          height: ZONE_H,
-          backgroundColor: COLORS.gpuBg,
-          border: `2px solid ${COLORS.gpuBorder}`,
-          borderRadius: 16,
-          opacity: zoneProgress,
-          transform: `scale(${interpolate(zoneProgress, [0, 1], [0.95, 1])})`,
-          boxShadow: `inset 0 0 ${60 + 40 * gpuGlowIntensity}px ${COLORS.gpuGlow}, 0 0 ${20 + 30 * gpuGlowIntensity}px ${COLORS.gpuGlow}`,
-        }}
-      >
-        {/* GPU header */}
-        <div
-          style={{
-            position: "absolute",
-            top: 20,
-            width: "100%",
-            textAlign: "center",
-            opacity: zoneLabelOpacity,
-          }}
-        >
-          <div
-            style={{
-              color: COLORS.gpuBorder,
-              fontSize: 28,
-              fontFamily: FONT,
-              fontWeight: 700,
-              letterSpacing: 1,
-            }}
-          >
-            GPU VRAM
-          </div>
-          <div
-            style={{
-              color: `${COLORS.gpuBorder}99`,
-              fontSize: 14,
-              fontFamily: MONO,
-              marginTop: 4,
-            }}
-          >
-            Fast • Limited Capacity
-          </div>
+      {/* GPU 0 */}
+      <GpuCard id={0} x={GPU0_X} y={GPU0_Y} />
+      {/* GPU 1 */}
+      <GpuCard id={1} x={GPU1_X} y={GPU1_Y} />
+
+      {/* "Distributed across GPUs" label */}
+      <div style={{ position: "absolute", top: GPU0_Y + GPU_H + 8, left: GPU0_X, width: GPU_W, textAlign: "center", opacity: gpuLabelOp }}>
+        <span style={{ color: COLORS.gpuBorder, fontSize: 16, fontFamily: MONO, fontWeight: 600 }}>
+          ~56 GB distributed across GPUs
+        </span>
+      </div>
+
+      {/* CPU DRAM */}
+      <div style={{
+        position: "absolute", top: CPU_Y, left: CPU_X, width: CPU_W, height: CPU_H,
+        backgroundColor: COLORS.cpuBg, border: `2px solid ${COLORS.cpuBorder}`, borderRadius: 16,
+        opacity: zoneProgress, transform: `scale(${interpolate(zoneProgress, [0, 1], [0.95, 1])})`,
+        boxShadow: `inset 0 0 40px ${COLORS.cpuGlow}`,
+      }}>
+        <div style={{ position: "absolute", top: 20, width: "100%", textAlign: "center", opacity: zoneLabelOp }}>
+          <div style={{ color: COLORS.cpuBorder, fontSize: 28, fontFamily: FONT, fontWeight: 700 }}>CPU Host DRAM</div>
+          <div style={{ color: `${COLORS.cpuBorder}99`, fontSize: 14, fontFamily: MONO, marginTop: 4 }}>Large Capacity • Offloaded</div>
         </div>
-
-        {/* GPU status indicator */}
-        <div
-          style={{
-            position: "absolute",
-            top: 16,
-            right: 16,
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            backgroundColor: COLORS.gpuBorder,
-            opacity: zoneLabelOpacity * glowPulse,
-            boxShadow: `0 0 8px ${COLORS.gpuBorder}`,
-          }}
-        />
-
-        {/* "Low-latency retrieval" label */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: 30,
-            width: "100%",
-            textAlign: "center",
-            opacity: gpuLabelOpacity,
-          }}
-        >
-          <div
-            style={{
-              display: "inline-block",
-              backgroundColor: `${COLORS.gpuBorder}15`,
-              border: `1px solid ${COLORS.gpuBorder}40`,
-              borderRadius: 8,
-              padding: "8px 20px",
-              color: COLORS.gpuBorder,
-              fontSize: 14,
-              fontFamily: MONO,
-              fontWeight: 600,
-            }}
-          >
-            Low-latency retrieval ready
-          </div>
-          <div style={{ marginTop: 6, color: COLORS.gpuBorder, fontSize: 13, fontFamily: MONO, opacity: gpuLabelOpacity }}>
-            ~56 GB for 100M context
+        <div style={{ position: "absolute", top: 16, right: 16, width: 10, height: 10, borderRadius: "50%", backgroundColor: COLORS.cpuBorder, opacity: zoneLabelOp * 0.7 }} />
+        <div style={{ position: "absolute", bottom: 30, width: "100%", textAlign: "center", opacity: cpuLabelOp }}>
+          <div style={{ display: "inline-block", backgroundColor: `${COLORS.cpuBorder}15`, border: `1px solid ${COLORS.cpuBorder}40`, borderRadius: 8, padding: "8px 20px", color: COLORS.cpuBorder, fontSize: 14, fontFamily: MONO, fontWeight: 600 }}>
+            Bulk content offloaded
           </div>
         </div>
       </div>
 
-      {/* ===== CPU DRAM Zone ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: ZONE_Y,
-          left: CPU_X,
-          width: CPU_W,
-          height: ZONE_H,
-          backgroundColor: COLORS.cpuBg,
-          border: `2px solid ${COLORS.cpuBorder}`,
-          borderRadius: 16,
-          opacity: zoneProgress,
-          transform: `scale(${interpolate(zoneProgress, [0, 1], [0.95, 1])})`,
-          boxShadow: `inset 0 0 40px ${COLORS.cpuGlow}`,
-        }}
-      >
-        {/* CPU header */}
-        <div
-          style={{
-            position: "absolute",
-            top: 20,
-            width: "100%",
-            textAlign: "center",
-            opacity: zoneLabelOpacity,
-          }}
-        >
-          <div
-            style={{
-              color: COLORS.cpuBorder,
-              fontSize: 28,
-              fontFamily: FONT,
-              fontWeight: 700,
-              letterSpacing: 1,
-            }}
-          >
-            CPU Host DRAM
-          </div>
-          <div
-            style={{
-              color: `${COLORS.cpuBorder}99`,
-              fontSize: 14,
-              fontFamily: MONO,
-              marginTop: 4,
-            }}
-          >
-            Large Capacity • Offloaded
-          </div>
-        </div>
-
-        {/* CPU capacity indicator */}
-        <div
-          style={{
-            position: "absolute",
-            top: 16,
-            right: 16,
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            backgroundColor: COLORS.cpuBorder,
-            opacity: zoneLabelOpacity * 0.7,
-          }}
-        />
-
-        {/* "Offloaded" label */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: 30,
-            width: "100%",
-            textAlign: "center",
-            opacity: cpuLabelOpacity,
-          }}
-        >
-          <div
-            style={{
-              display: "inline-block",
-              backgroundColor: `${COLORS.cpuBorder}15`,
-              border: `1px solid ${COLORS.cpuBorder}40`,
-              borderRadius: 8,
-              padding: "8px 20px",
-              color: COLORS.cpuBorder,
-              fontSize: 14,
-              fontFamily: MONO,
-              fontWeight: 600,
-            }}
-          >
-            Bulk storage offloaded
-          </div>
-        </div>
-      </div>
-
-      {/* ===== Connector between zones ===== */}
+      {/* Connector */}
       {(() => {
-        const connW = CPU_X - (GPU_X + GPU_W);
-        const connH = 80;
-        const midY = ZONE_Y + ZONE_H - 80;
+        const connLeft = GPU0_X + GPU_W + 10;
+        const connRight = CPU_X - 10;
+        const connW = connRight - connLeft;
+        const midY2 = CPU_Y + CPU_H - 60;
         return (
-          <svg
-            style={{
-              position: "absolute",
-              top: midY - connH / 2,
-              left: GPU_X + GPU_W,
-              opacity: zoneLabelOpacity,
-            }}
-            width={connW}
-            height={connH}
-          >
-            {/* Double dashed lines */}
-            <line
-              x1="20" y1={connH / 2 - 6}
-              x2={connW - 20} y2={connH / 2 - 6}
-              stroke={COLORS.textDim}
-              strokeWidth="2"
-              strokeDasharray="12 6"
-            />
-            <line
-              x1="20" y1={connH / 2 + 6}
-              x2={connW - 20} y2={connH / 2 + 6}
-              stroke={COLORS.textDim}
-              strokeWidth="2"
-              strokeDasharray="12 6"
-            />
-            {/* Arrowheads on both ends */}
-            <polygon
-              points={`25,${connH / 2 - 14} 15,${connH / 2} 25,${connH / 2 + 14}`}
-              fill={COLORS.textDim}
-            />
-            <polygon
-              points={`${connW - 25},${connH / 2 - 14} ${connW - 15},${connH / 2} ${connW - 25},${connH / 2 + 14}`}
-              fill={COLORS.textDim}
-            />
-            {/* Label with background */}
-            <rect
-              x={connW / 2 - 70} y={connH / 2 - 14}
-              width={140} height={28}
-              rx={6}
-              fill={COLORS.bg}
-            />
-            <text
-              x={connW / 2}
-              y={connH / 2 + 5}
-              fill={COLORS.textDim}
-              fontSize="16"
-              fontFamily={MONO}
-              fontWeight="600"
-              textAnchor="middle"
-            >
-              PCIe / NVLink
-            </text>
+          <svg style={{ position: "absolute", top: midY2 - 20, left: connLeft, opacity: zoneLabelOp }} width={connW} height={40}>
+            <line x1="10" y1="14" x2={connW - 10} y2="14" stroke={COLORS.textDim} strokeWidth="2" strokeDasharray="10 5" />
+            <line x1="10" y1="26" x2={connW - 10} y2="26" stroke={COLORS.textDim} strokeWidth="2" strokeDasharray="10 5" />
+            <polygon points={`14,6 4,20 14,34`} fill={COLORS.textDim} />
+            <polygon points={`${connW - 14},6 ${connW - 4},20 ${connW - 14},34`} fill={COLORS.textDim} />
+            <rect x={connW / 2 - 60} y={6} width={120} height={28} rx={6} fill={COLORS.bg} />
+            <text x={connW / 2} y={25} fill={COLORS.textDim} fontSize="14" fontFamily={MONO} fontWeight="600" textAnchor="middle">PCIe / NVLink</text>
           </svg>
         );
       })()}
 
-      {/* ===== Moving trail particles ===== */}
-      {routingMoving &&
-        Array.from({ length: 5 }, (_, i) => {
-          const trailDelay = i * 0.05;
-          const trailProgress = Math.max(0, routingMoveProgress - trailDelay);
-          const tx = interpolate(trailProgress, [0, 1], [rStartX, GPU_TARGET_X]);
-          const ty = interpolate(trailProgress, [0, 1], [startY, GPU_TARGET_Y]);
-          return (
-            <div
-              key={`r-trail-${i}`}
-              style={{
-                position: "absolute",
-                top: ty + 50,
-                left: tx - 4,
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: COLORS.routingMatrix,
-                opacity: 0.3 - i * 0.05,
-                filter: "blur(2px)",
-              }}
-            />
-          );
-        })}
-      {kvMoving &&
-        Array.from({ length: 5 }, (_, i) => {
-          const trailDelay = i * 0.05;
-          const trailProgress = Math.max(0, kvMoveProgress - trailDelay);
-          const tx1 = interpolate(trailProgress, [0, 1], [kStartX, CPU_K_TARGET_X]);
-          const ty1 = interpolate(trailProgress, [0, 1], [startY, CPU_KV_Y]);
-          const tx2 = interpolate(trailProgress, [0, 1], [vStartX, CPU_V_TARGET_X]);
-          const ty2 = interpolate(trailProgress, [0, 1], [startY, CPU_KV_Y]);
-          return (
-            <React.Fragment key={`kv-trail-${i}`}>
-              <div
-                style={{
-                  position: "absolute",
-                  top: ty1 + 50,
-                  left: tx1 - 4,
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  backgroundColor: COLORS.keyMatrix,
-                  opacity: 0.3 - i * 0.05,
-                  filter: "blur(2px)",
-                }}
-              />
-              <div
-                style={{
-                  position: "absolute",
-                  top: ty2 + 50,
-                  left: tx2 - 4,
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  backgroundColor: COLORS.valueMatrix,
-                  opacity: 0.3 - i * 0.05,
-                  filter: "blur(2px)",
-                }}
-              />
-            </React.Fragment>
-          );
-        })}
-
-      {/* ===== Matrix: K̄ (moves to CPU) ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: keyY,
-          left: keyX - 70,
-          opacity: matricesAppear,
-          transform: `scale(${interpolate(matricesAppear, [0, 1], [0.5, 1])})`,
-        }}
-      >
-        <MatrixBox
-          label={<KBar />}
-          sub="Compressed Keys"
-          color={COLORS.keyMatrix}
-        />
+      {/* Matrix: K̄ (moves to CPU) */}
+      <div style={{ position: "absolute", top: keyY2, left: keyX - 70, opacity: matricesAppear, transform: `scale(${interpolate(matricesAppear, [0, 1], [0.5, 1])})` }}>
+        <MatrixBox label={<KBar />} sub="Compressed Keys" color={COLORS.keyMatrix} />
       </div>
 
-      {/* ===== Matrix: V̄ (moves to CPU) ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: valY,
-          left: valX - 70,
-          opacity: matricesAppear,
-          transform: `scale(${interpolate(matricesAppear, [0, 1], [0.5, 1])})`,
-        }}
-      >
-        <MatrixBox
-          label={<VBar />}
-          sub="Compressed Values"
-          color={COLORS.valueMatrix}
-        />
+      {/* Matrix: V̄ (moves to CPU) */}
+      <div style={{ position: "absolute", top: valY, left: valX - 70, opacity: matricesAppear, transform: `scale(${interpolate(matricesAppear, [0, 1], [0.5, 1])})` }}>
+        <MatrixBox label={<VBar />} sub="Compressed Values" color={COLORS.valueMatrix} />
       </div>
 
-      {/* ===== Matrix: K̄ᴿ (moves to GPU) ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: routingY,
-          left: routingX - 70,
-          opacity: matricesAppear,
-          transform: `scale(${interpolate(matricesAppear, [0, 1], [0.5, 1])})`,
-        }}
-      >
-        <MatrixBox
-          label={<KBarR />}
-          sub="Routing Keys"
-          color={COLORS.routingMatrix}
-        />
-      </div>
+      {/* Matrix: K̄ᴿ — original (fades as it splits) */}
+      {!splitVisible && (
+        <div style={{ position: "absolute", top: startY, left: rStartX - 70, opacity: matricesAppear, transform: `scale(${interpolate(matricesAppear, [0, 1], [0.5, 1])})` }}>
+          <MatrixBox label={<KBarR />} sub="Routing Keys" color={COLORS.routingMatrix} />
+        </div>
+      )}
 
-      {/* ===== "From Scene 1" label ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: CENTER_Y - 50,
-          width: "100%",
-          textAlign: "center",
-          opacity: interpolate(
-            frame,
-            [2 * fps, 2.5 * fps, 3.5 * fps, 4 * fps],
-            [0, 1, 1, 0],
-            { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-          ),
-          color: COLORS.textMuted,
-          fontSize: 16,
-          fontFamily: MONO,
-        }}
-      >
+      {/* K̄ᴿ shard 0 → GPU0 */}
+      {splitVisible && (
+        <div style={{ position: "absolute", top: r0Y, left: r0X - 60, opacity: 1, transform: `scale(${interpolate(routingMoveP, [0.1, 0.3], [1, 0.85])})` }}>
+          <MatrixBox label={<><KBarR /> <span style={{ fontSize: 14 }}>[0]</span></>} sub="Shard 0" color={COLORS.routingMatrix} width={120} height={80} />
+        </div>
+      )}
+
+      {/* K̄ᴿ shard 1 → GPU1 */}
+      {splitVisible && (
+        <div style={{ position: "absolute", top: r1Y, left: r1X - 60, opacity: 1, transform: `scale(${interpolate(routingMoveP, [0.1, 0.3], [1, 0.85])})` }}>
+          <MatrixBox label={<><KBarR /> <span style={{ fontSize: 14 }}>[1]</span></>} sub="Shard 1" color={COLORS.routingMatrix} width={120} height={80} />
+        </div>
+      )}
+
+      {/* "From Scene 1" label */}
+      <div style={{
+        position: "absolute", top: CENTER_Y - 50, width: "100%", textAlign: "center",
+        opacity: ci([2 * fps, 2.5 * fps, 3.5 * fps, 4 * fps], [0, 1, 1, 0]),
+        color: COLORS.textMuted, fontSize: 18, fontFamily: MONO,
+      }}>
         Compressed matrices from Global Memory Encoding
       </div>
 
-      {/* ===== Explanation text ===== */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 120,
-          width: "100%",
-          textAlign: "center",
-          opacity: explainOpacity,
-        }}
-      >
-        <div
-          style={{
-            color: COLORS.textDim,
-            fontSize: 20,
-            fontFamily: FONT,
-            fontWeight: 400,
-            lineHeight: 1.6,
-          }}
-        >
-          Memory capacity is decoupled from GPU VRAM limits
+      {/* Explanation */}
+      <div style={{ position: "absolute", bottom: 120, width: "100%", textAlign: "center", opacity: explainOp }}>
+        <div style={{ color: COLORS.textDim, fontSize: 20, fontFamily: FONT, fontWeight: 400, lineHeight: 1.6 }}>
+          Memory capacity decoupled from GPU VRAM — distributed routing keys + offloaded content
         </div>
       </div>
 
-      {/* ===== "100M tokens" callout ===== */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 40,
-          width: "100%",
-          textAlign: "center",
-          opacity: tokenCalloutOpacity,
-          transform: `scale(${tokenCalloutScale})`,
-        }}
-      >
-        <div
-          style={{
-            display: "inline-block",
-            background: "linear-gradient(135deg, #6366f120, #a855f720)",
-            border: "2px solid #a855f7",
-            borderRadius: 16,
-            padding: "12px 36px",
-            color: "#a855f7",
-            fontSize: 28,
-            fontFamily: FONT,
-            fontWeight: 700,
-          }}
-        >
-          Store up to 100M+ tokens
+      {/* "100M tokens" callout */}
+      <div style={{ position: "absolute", bottom: 40, width: "100%", textAlign: "center", opacity: calloutOp, transform: `scale(${calloutScale})` }}>
+        <div style={{ display: "inline-block", background: "linear-gradient(135deg, #6366f120, #a855f720)", border: "2px solid #a855f7", borderRadius: 16, padding: "12px 36px", color: "#a855f7", fontSize: 28, fontFamily: FONT, fontWeight: 700 }}>
+          100M tokens on 2&times;A800 GPUs
         </div>
       </div>
     </AbsoluteFill>
